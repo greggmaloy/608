@@ -1,0 +1,205 @@
+---
+title: "Data 608 Week 14 Discussion"
+author: "Gregg Maloy"
+date: "2025-11-25"
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide
+runtime: shiny
+---
+
+```{r}
+# app.R
+# app.R
+
+library(shiny)
+library(dplyr)
+library(tidyr)
+library(plotly)
+
+
+# =========================================
+url <- "https://raw.githubusercontent.com/greggmaloy/608/refs/heads/main/assignment_5_temp.csv"
+df <- read.csv(url, check.names = TRUE)
+
+# Rename LOWESS column if needed
+if ("Lowess.30." %in% names(df)) {
+  names(df)[names(df) == "Lowess.30."] <- "Lowess_30"
+}
+
+# Internal name -> pretty name map
+series_map <- c(
+  No_Smoothing = "No smoothing",
+  Lowess_30    = "LOWESS (30-year)"
+)
+
+# Keep only series that actually exist
+series_map <- series_map[names(series_map) %in% names(df)]
+
+# Color map for the visible lines
+color_map <- c(
+  "No smoothing"      = "black",
+  "LOWESS (30-year)"  = "red"
+)
+
+year_min <- min(df$Year, na.rm = TRUE)
+year_max <- max(df$Year, na.rm = TRUE)
+
+# =========================================
+# UI
+# =========================================
+ui <- fluidPage(
+  titlePanel("Global Temperature Anomalies – Shiny + Plotly"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      h4("Controls"),
+      
+      sliderInput(
+        "yearRange",
+        "Year range:",
+        min = year_min,
+        max = year_max,
+        value = c(year_min, year_max),
+        step = 1,
+        sep = ""
+      ),
+      
+      checkboxGroupInput(
+        "series",
+        "Series to display:",
+        choices = setNames(names(series_map), series_map),
+        selected = names(series_map)
+      ),
+      
+      checkboxInput(
+        "showTrend",
+        "Show linear trend for No_Smoothing",
+        value = TRUE
+      ),
+      
+      hr(),
+      helpText("Hover over the lines to see exact values. ",
+               "Use the controls to change the time window and series.")
+    ),
+    
+    mainPanel(
+      plotlyOutput("tempPlot", height = "450px"),
+      br(),
+      verbatimTextOutput("statsText")
+    )
+  )
+)
+
+# =========================================
+# SERVER
+# =========================================
+server <- function(input, output, session) {
+  
+  # Filter based on year range
+  filtered_data <- reactive({
+    df %>%
+      filter(Year >= input$yearRange[1],
+             Year <= input$yearRange[2])
+  })
+  
+  # Plotly line plot with correct colors
+  output$tempPlot <- renderPlotly({
+    dat <- filtered_data()
+    req(length(input$series) > 0)
+    
+    p <- plot_ly(dat, x = ~Year)
+    
+    # Add one trace per selected series
+    for (colname in input$series) {
+      pretty <- series_map[[colname]]
+      line_color <- color_map[[pretty]]
+      
+      p <- p %>%
+        add_lines(
+          y = dat[[colname]],
+          name = pretty,
+          line = list(color = line_color, width = 2),
+          hovertemplate = paste0(
+            "Series: ", pretty, "<br>",
+            "Year: %{x}<br>",
+            "Temp: %{y:.3f} °C",
+            "<extra></extra>"
+          )
+        )
+    }
+    
+    # Add GRAY trend line (dashed)
+    if (input$showTrend && "No_Smoothing" %in% input$series && "No_Smoothing" %in% names(dat)) {
+      ns_data <- dat %>% select(Year, No_Smoothing) %>% drop_na()
+      
+      if (nrow(ns_data) >= 2) {
+        fit <- lm(No_Smoothing ~ Year, data = ns_data)
+        ns_data$Trend <- predict(fit, newdata = ns_data)
+        
+        p <- p %>%
+          add_lines(
+            data = ns_data,
+            x = ~Year,
+            y = ~Trend,
+            name = "Linear trend",
+            line = list(
+              color = "#D3D3D3",   # gray
+              dash = "dash",
+              width = 3
+            ),
+            hovertemplate = paste0(
+              "Series: Linear trend<br>",
+              "Year: %{x}<br>",
+              "Trend: %{y:.3f} °C",
+              "<extra></extra>"
+            )
+          )
+      }
+    }
+    
+    p %>%
+      layout(
+        title = "Global Temperature Anomalies",
+        xaxis = list(title = "Year"),
+        yaxis = list(title = "Temperature Anomaly (°C)"),
+        legend = list(title = list(text = "Series"))
+      )
+  })
+  
+  # Stats for No_Smoothing
+  output$statsText <- renderText({
+    dat <- filtered_data()
+    
+    if (!"No_Smoothing" %in% names(dat)) {
+      return("No_Smoothing series not found in dataset.")
+    }
+    
+    dat_ns <- dat %>% select(Year, No_Smoothing) %>% drop_na()
+    if (nrow(dat_ns) < 2) return("Not enough data to compute statistics.")
+    
+    fit <- lm(No_Smoothing ~ Year, data = dat_ns)
+    
+    slope <- coef(fit)[["Year"]]
+    avg   <- mean(dat_ns$No_Smoothing)
+    med   <- median(dat_ns$No_Smoothing)
+    
+    paste0(
+      "Statistics for No_Smoothing (", input$yearRange[1], "–", input$yearRange[2], "):\n",
+      sprintf("  Slope: %+0.3f °C/year\n", slope),
+      sprintf("  Average anomaly: %0.3f °C\n", avg),
+      sprintf("  Median anomaly:  %0.3f °C", med)
+    )
+  })
+}
+
+# =========================================
+# RUN APP
+# =========================================
+shinyApp(ui = ui, server = server)
+
+
+
+```
+
